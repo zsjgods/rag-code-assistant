@@ -1,0 +1,52 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 examples/hooks-demo/check_dangerous.py",
+            "timeout": 3000,
+            "message": "Checking bash command safety..."
+          }
+        ]
+      },
+      {
+        "matcher": "write_file",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 examples/hooks-demo/audit_write.py",
+            "timeout": 2000,
+            "async": true
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '{\"additionalContext\": \"Git branch: '$(git branch --show-current 2>/dev/null || echo N/A)'\"}'",
+            "timeout": 2000,
+            "message": "Attaching git context..."
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 examples/hooks-demo/check_completion.py",
+            "timeout": 5000,
+            "async": true
+          }
+        ]
+      }
+    ]
+  }
+}

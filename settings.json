@@ -1,0 +1,41 @@
+{
+  "model": "claude-sonnet-4-6-20250514",
+  "max_turns": 100,
+  "token_threshold": 100000,
+  "keep_recent_tools": 3,
+  "poll_interval": 5,
+  "idle_timeout": 60,
+  "max_retries": 3,
+  "collapse_keep_head": 3,
+  "collapse_keep_tail": 3,
+
+  "hooks": {
+    "SessionStart": [],
+    "UserPromptSubmit": [],
+    "PreToolUse": [],
+    "PostToolUse": [],
+    "Stop": []
+  },
+
+  "agents": {
+    "global_deny_tools": ["Agent", "TaskStop", "AskUserQuestion", "ExitPlanMode"],
+    "async_whitelist": ["Read", "Write", "Bash", "Grep", "Glob", "WebSearch"],
+    "explore": {
+      "agentType": "Explore",
+      "disallowedTools": ["Write", "Edit", "Bash"],
+      "model": "haiku",
+      "maxTurns": 15
+    },
+    "general-purpose": {
+      "agentType": "general-purpose",
+      "allowedTools": ["*"],
+      "model": "inherit",
+      "maxTurns": 50
+    }
+  },
+
+  "permissions": {
+    "allow": [],
+    "deny": []
+  }
+}

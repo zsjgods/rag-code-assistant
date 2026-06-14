@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.venv/
+.env
+settings.local.json
+.team/
+.tasks/
+.transcripts/
+/tmp/
+*.jsonl
+.s_full_session.json
