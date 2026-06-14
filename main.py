@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
-"""s_full.py — Reference Agent implementing Claude Code core architecture.
+"""agent-core — 逐模块实现 Claude Code 核心架构的教学级 Agent 框架。
 
-Hook system, three-tier compression, tool isolation, skill loading,
-task management, background execution, teammate system.
+钩子系统、三级压缩、工具隔离、技能加载、任务管理、后台执行。
 
 REPL commands: /compact /tasks /team /inbox /hooks
 """

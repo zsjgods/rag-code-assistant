@@ -1,7 +1,7 @@
 [project]
-name = "s-full"
+name = "agent-core"
 version = "2.0.0"
-description = "A pedagogical Agent framework implementing Claude Code's core architecture"
+description = "逐模块实现 Claude Code 核心架构的教学级 Agent 框架"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
