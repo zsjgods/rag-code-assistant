@@ -45,6 +45,8 @@ from src.tasks.task_manager import TaskManager
 from src.config.loader import load_config
 from src.recovery.error_handler import ErrorRecoveryPipeline
 from src.recovery.session import SessionState
+from src.rag.indexer import Indexer
+from src.rag.retriever import Retriever
 
 # ── Load config ──────────────────────────────────────────
 config = load_config(WORKDIR)
@@ -61,6 +63,21 @@ BUS = MessageBus(WORKDIR)
 SCRATCHPAD = Scratchpad()
 STORE = Store({"cwd": str(WORKDIR), "model": MODEL})
 SESSION = SessionState(WORKDIR)
+INDEXER = Indexer(WORKDIR / ".rag_index")
+
+# Lazy-loaded retriever — built on first search or via /index command
+_retriever: Retriever = None
+
+def get_retriever() -> Retriever | None:
+    """Return a ready retriever, or None if index not built yet."""
+    global _retriever
+    if _retriever is not None:
+        return _retriever
+    if INDEXER.is_built:
+        idx = INDEXER.load()
+        _retriever = Retriever(idx.embedder, idx.chunks)
+        return _retriever
+    return None
 
 # ── Background manager ────────────────────────────────────
 class BackgroundManager:
@@ -131,6 +148,14 @@ def _register_tools():
                    {"type": "object", "properties": {"pattern": {"type": "string"}}, "required": ["pattern"]},
                    lambda **kw: run_glob(kw["pattern"]), is_read_only=True, is_concurrency_safe=True),
 
+        build_tool("rag_index", "Build RAG code index for a project directory.",
+                   {"type": "object", "properties": {"root": {"type": "string"}, "force": {"type": "boolean"}}, "required": ["root"]},
+                   lambda **kw: _do_rag_index(kw["root"], kw.get("force", False))),
+
+        build_tool("rag_search", "Search indexed code with two-stage retrieval.",
+                   {"type": "object", "properties": {"query": {"type": "string"}, "top_k": {"type": "integer"}}, "required": ["query"]},
+                   lambda **kw: _do_rag_search(kw["query"], kw.get("top_k", 10)), is_read_only=True, is_concurrency_safe=True),
+
         build_tool("TodoWrite", "Update task tracking list.",
                    {"type": "object", "properties": {"items": {"type": "array", "items": {"type": "object", "properties": {"content": {"type": "string"}, "status": {"type": "string", "enum": ["pending", "in_progress", "completed"]}, "activeForm": {"type": "string"}}, "required": ["content", "status", "activeForm"]}}}, "required": ["items"]},
                    lambda **kw: TODO.update(kw["items"])),
@@ -187,6 +212,42 @@ def _register_tools():
 
 _register_tools()
 
+# ── RAG helpers ───────────────────────────────────────────
+
+def _do_rag_index(root: str, force: bool = False) -> str:
+    """Build or rebuild the RAG code index."""
+    try:
+        idx = INDEXER.build(root, force=force)
+        global _retriever
+        _retriever = Retriever(idx.embedder, idx.chunks)
+        return (
+            f"Index built: {len(idx.chunks)} chunks from {idx.file_count} files\n"
+            f"Source: {idx.source_root}\n"
+            f"Use rag_search to query."
+        )
+    except Exception as e:
+        return f"Error building index: {e}"
+
+
+def _do_rag_search(query: str, top_k: int = 10) -> str:
+    """Two-stage code search."""
+    ret = get_retriever()
+    if ret is None:
+        return "No index found. Run rag_index first to build one."
+    try:
+        results = ret.search(query, top_k)
+        if not results:
+            return "(no matches)"
+        lines = []
+        for r in results:
+            lines.append(
+                f"[{r['rank']}] {r['file']}::{r['symbol']} ({r['type']}, L{r['lines']}) score={r['score']}\n"
+                f"```python\n{r['code']}\n```\n"
+            )
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Error searching: {e}"
+
 # ── System prompt ─────────────────────────────────────────
 SYSTEM = f"""You are a coding agent at {WORKDIR}. Use tools to solve tasks.
 
@@ -197,6 +258,8 @@ SYSTEM = f"""You are a coding agent at {WORKDIR}. Use tools to solve tasks.
 - Use load_skill for specialized knowledge.
 - Use scratchpad_write/scratchpad_read for cross-agent knowledge sharing.
 - Use grep and glob for code search — don't use bash for this.
+- Use rag_index once to build a code index, then rag_search for semantic queries.
+- rag_search uses two-stage retrieval: coarse TF-IDF → fine cosine re-rank.
 
 ## Available skills
 {SKILLS.descriptions()}
@@ -228,7 +291,7 @@ compression = CompressionPipeline(
 
 # ── REPL ──────────────────────────────────────────────────
 def main():
-    print(f"s_full.py v2.0 — Reference Agent")
+    print(f"agent-core v2.0 — Reference Agent")
     print(f"  Model: {MODEL}")
     print(f"  Skills: {len(SKILLS.skills)} loaded")
     print(f"  Hooks: {sum(len(h) for h in hooks._hooks.values())} registered")
@@ -262,6 +325,12 @@ def main():
             for event, h_list in hooks._hooks.items():
                 if h_list:
                     print(f"  {event}: {len(h_list)} hooks")
+            continue
+        if query.strip().startswith("/index"):
+            parts = query.strip().split(maxsplit=1)
+            root = parts[1] if len(parts) > 1 else str(WORKDIR)
+            force = "--force" in query
+            print(_do_rag_index(root, force))
             continue
 
         # ▶ UserPromptSubmit hook

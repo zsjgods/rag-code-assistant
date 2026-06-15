@@ -1,0 +1,136 @@
+{
+  "model": "claude-sonnet-4-6-20250514",
+  "max_turns": 100,
+  "token_threshold": 100000,
+  "keep_recent_tools": 3,
+
+  // ============================================================
+  // hooks 配置 —— 这就是操控 Hook 系统的全部"遥控器"
+  // ============================================================
+  "hooks": {
+
+    // ── 事件 1：会话启动 ──────────────────────────────────────
+    // 触发时机：Agent 刚启动，只执行一次
+    // 用途：初始化日志、检查环境、加载审计规则
+    "SessionStart": [
+      {
+        // matcher：留空 = 不管什么情况都触发
+        "matcher": "",
+        // hooks 数组：可以放多个 hook，按顺序执行
+        "hooks": [
+          {
+            // type: "command" = 跑一个外部脚本
+            "type": "command",
+            // command: 要跑的 shell 命令
+            // $INPUT_JSON 会被替换成当前事件的上下文 JSON
+            "command": "echo '{\"additionalContext\": \"Session started at '$(date)'\"}'",
+            // timeout: 超时毫秒数，超时就 kill
+            "timeout": 2000
+          }
+        ]
+      }
+    ],
+
+    // ── 事件 2：用户输入时 ────────────────────────────────────
+    // 触发时机：用户每次按回车发送消息之后、LLM 看到之前
+    // 用途：检查用户输入是否包含恶意内容、注入附加上下文
+    "UserPromptSubmit": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            // 这个例子：把当前 git 分支注入到上下文里
+            "command": "echo '{\"additionalContext\": \"Current git branch: '$(git branch --show-current 2>/dev/null || echo none)'\"}'",
+            "timeout": 2000
+          }
+        ]
+      }
+    ],
+
+    // ── 事件 3：工具执行前  ★ 最重要的安全拦截点 ─────────────
+    // 触发时机：LLM 说"调 write_file" 之后、实际写文件之前
+    // 用途：阻止危险操作、修改工具参数、注入额外信息
+    "PreToolUse": [
+      // ── 规则组 1：针对 Bash 工具的检查 ──
+      {
+        // matcher: "Bash" = 只有工具名是 Bash 时才触发这组 hook
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            // 这个脚本拿到整个工具调用的 JSON，检查命令是否危险
+            // 如果危险 → stdout: {"decision": "block", "reason": "危险命令"}
+            // 如果安全 → stdout: {"decision": "approve"}
+            "command": "python3 examples/hooks-demo/check_dangerous.py $INPUT_JSON",
+            "timeout": 3000
+          }
+        ]
+      },
+      // ── 规则组 2：针对 write_file 工具的检查 ──
+      {
+        "matcher": "write_file",
+        "hooks": [
+          {
+            "type": "command",
+            // 检查写入路径是否在允许的目录里
+            "command": "python3 examples/hooks-demo/check_path.py $INPUT_JSON",
+            "timeout": 2000
+          }
+        ]
+      },
+      // ── 规则组 3：对所有工具生效 ——
+      {
+        // matcher: "*" = 通配，任何工具都触发
+        "matcher": "*",
+        // priority: 决定这组 hook 的执行顺序
+        // local > project > user（按这个顺序排，后面的可能被前面的 block 跳过）
+        "priority": "project",
+        "hooks": [
+          {
+            // type: "prompt" = 调 LLM 来判断（而不是跑脚本）
+            // $ARGUMENTS 会被替换成工具调用的详情
+            "type": "prompt",
+            "prompt": "检查以下工具调用是否合理。如果是破坏性操作（写入、删除），请确认它看起来安全。如果不安全，输出 {\"decision\": \"block\", \"reason\": \"...\"}。工具调用: $ARGUMENTS",
+            "timeout": 5000
+          }
+        ]
+      }
+    ],
+
+    // ── 事件 4：工具执行后 ────────────────────────────────────
+    // 触发时机：工具刚刚跑完、结果还没返回给 LLM
+    // 用途：审计日志、结果检查（有没有敏感信息泄漏）、性能统计
+    "PostToolUse": [
+      {
+        // 所有工具执行完后都记录审计日志
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 examples/hooks-demo/audit_log.py $INPUT_JSON",
+            "timeout": 2000
+          }
+        ]
+      }
+    ],
+
+    // ── 事件 5：LLM 结束回答 ─────────────────────────────────
+    // 触发时机：LLM 说"我回答完了"（stop_reason != "tool_use"）
+    // 用途：检查回答质量、强制续命（exit code 2）
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            // 这个例子：检查回答里有没有未完成的任务
+            // 返回 exit code 2 = 强制 LLM 继续（不给停）
+            "command": "python3 examples/hooks-demo/check_completion.py $INPUT_JSON",
+            "timeout": 3000
+          }
+        ]
+      }
+    ]
+  }
+}
