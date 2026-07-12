@@ -58,7 +58,7 @@ class SkillLoader:
         if not self.skills_dir.exists():
             return
         for f in sorted(self.skills_dir.rglob("SKILL.md")):
-            text = f.read_text()
+            text = f.read_text(encoding="utf-8")
             match = re.match(r"^---\n(.*?)\n---\n(.*)", text, re.DOTALL)
             meta, body = {}, text
             if match:

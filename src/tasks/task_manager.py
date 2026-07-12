@@ -17,10 +17,10 @@ class TaskManager:
         p = self.dir / f"task_{tid}.json"
         if not p.exists():
             raise ValueError(f"Task {tid} not found")
-        return json.loads(p.read_text())
+        return json.loads(p.read_text(encoding="utf-8"))
 
     def _save(self, task: dict):
-        (self.dir / f"task_{task['id']}.json").write_text(json.dumps(task, indent=2))
+        (self.dir / f"task_{task['id']}.json").write_text(json.dumps(task, indent=2), encoding="utf-8")
 
     def create(self, subject: str, description: str = "") -> str:
         task = {
@@ -44,7 +44,7 @@ class TaskManager:
             task["status"] = status
             if status == "completed":
                 for f in self.dir.glob("task_*.json"):
-                    t = json.loads(f.read_text())
+                    t = json.loads(f.read_text(encoding="utf-8"))
                     if tid in t.get("blockedBy", []):
                         t["blockedBy"].remove(tid)
                         self._save(t)
@@ -61,7 +61,7 @@ class TaskManager:
         return json.dumps(task, indent=2)
 
     def list_all(self) -> str:
-        tasks = [json.loads(f.read_text()) for f in sorted(self.dir.glob("task_*.json"))]
+        tasks = [json.loads(f.read_text(encoding="utf-8")) for f in sorted(self.dir.glob("task_*.json"))]
         if not tasks:
             return "No tasks."
         lines = []

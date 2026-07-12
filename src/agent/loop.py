@@ -16,7 +16,7 @@ Hook insertion points:
 import json
 import time
 from pathlib import Path
-from typing import Callable
+from typing import Callable, TYPE_CHECKING
 
 from src.agent.hooks import HookManager, HookInput, HookResult
 from src.agent.filter_tools import filter_tools_for_agent
@@ -24,6 +24,9 @@ from src.compression.micro import microcompact, estimate_tokens
 from src.compression.collapse import context_collapse, CollapseCircuitBreaker
 from src.compression.auto import auto_compact
 from src.tools.registry import ToolRegistry
+
+if TYPE_CHECKING:
+    from src.context import ContextOrchestrator
 
 WORKDIR = Path.cwd()
 
@@ -43,9 +46,22 @@ def _build_system_prompt(
     base_prompt: str,
     skills_descriptions: str,
     additional_context: str = "",
+    current_objective: str = "",
+    persistent_facts: list[str] = None,
 ) -> str:
-    """Assemble the system prompt with injected context."""
+    """Assemble the system prompt with injected context and persistent state."""
     parts = [base_prompt]
+
+    # Compression-immune persistent block
+    persistent_items = []
+    if current_objective:
+        persistent_items.append(f"CURRENT OBJECTIVE: {current_objective}")
+    if persistent_facts:
+        persistent_items.extend(persistent_facts)
+    if persistent_items:
+        block = "<persistent-context>\n" + "\n".join(persistent_items) + "\n</persistent-context>"
+        parts.insert(0, block)
+
     if skills_descriptions:
         parts.append(f"\nAvailable skills:\n{skills_descriptions}")
     if additional_context:
@@ -67,6 +83,12 @@ def agent_loop(
     poll_interval: int = 5,
     bg_drain_fn: Callable[[], list] | None = None,
     inbox_check_fn: Callable[[], list] | None = None,
+    get_objective_fn: Callable[[], str] | None = None,
+    on_important_fn: Callable[[str, list[str]], None] | None = None,
+    get_persistent_fn: Callable[[], list[str]] | None = None,
+    classify_intent_fn: Callable[[str], str] | None = None,
+    filter_tools_fn: Callable[[str, list[dict]], list[dict]] | None = None,
+    orchestrator: "ContextOrchestrator | None" = None,
 ) -> None:
     """
     Main agent loop with hook integration.
@@ -83,10 +105,39 @@ def agent_loop(
         keep_recent: Tool results to preserve during microcompact
         bg_drain_fn: Function to drain background task notifications
         inbox_check_fn: Function to check the lead's inbox
+        get_objective_fn: Function to read current persistent objective
+        classify_intent_fn: Optional intent classifier (query → intent string)
+        filter_tools_fn: Optional tool filter (intent, all_tools → filtered_tools)
+        orchestrator: Optional ContextOrchestrator (M1+). When provided,
+            all context operations (message append, system prompt build)
+            route through the orchestrator instead of direct messages[] access.
     """
     hm = hook_manager
     rounds_without_todo = 0
     circuit_breaker = CollapseCircuitBreaker(max_failures=3)
+
+    # ── M1 Context Engine integration ──────────────────
+    _use_orch = orchestrator is not None
+
+    if _use_orch:
+        # Alias messages to orchestrator's internal list.
+        # Reads (compression, intent classification) work unchanged.
+        # Appends route through orchestrator.add_message().
+        messages = orchestrator.get_messages()
+
+        # Derive callbacks from orchestrator if not explicitly provided
+        if get_objective_fn is None:
+            get_objective_fn = lambda: orchestrator.store.get("current_objective", "")
+        if get_persistent_fn is None:
+            get_persistent_fn = lambda: orchestrator.store.get("persistent_facts", [])
+        if on_important_fn is None:
+            on_important_fn = orchestrator.on_important_event
+
+        def _append_msg(role, content):
+            orchestrator.add_message(role, content)
+    else:
+        def _append_msg(role, content):
+            messages.append({"role": role, "content": content})
 
     # ▶ SessionStart hook
     if hm:
@@ -96,38 +147,56 @@ def agent_loop(
         ))
 
     # Build initial system prompt
-    system = _build_system_prompt(base_system, skills_descriptions)
+    if _use_orch:
+        result = orchestrator.build_prompt()
+        system = result.system
+    else:
+        system = _build_system_prompt(base_system, skills_descriptions)
 
     while True:
         # ── Pre-processing ──────────────────────────────
-        # Tier 1: Micro-compact
-        microcompact(messages, keep_recent)
-
-        # Tier 2 + 3: Collapse + auto
-        if estimate_tokens(messages) > token_threshold:
-            if not circuit_breaker.is_open:
-                collapsed = context_collapse(
-                    messages,
-                    lambda p: _llm_call(
-                        [{"role": "user", "content": p}],
-                        "You are a conversation summarizer.", [], model, 1000, client,
-                    ).content[0].text,
-                    keep_head=3, keep_tail=3,
-                )
-                if collapsed is not None:
-                    messages[:] = collapsed
-                    circuit_breaker.record_success()
-                else:
-                    try:
-                        messages[:] = auto_compact(messages, lambda p: _llm_call(
+        # M3: BudgetManager → Policy → Pipeline
+        if _use_orch and orchestrator.has_compression:
+            orchestrator.tick()
+        else:
+            # Legacy direct compression (backward compat)
+            microcompact(messages, keep_recent)
+            if estimate_tokens(messages) > token_threshold:
+                if not circuit_breaker.is_open:
+                    collapsed = context_collapse(
+                        messages,
+                        lambda p: _llm_call(
                             [{"role": "user", "content": p}],
-                            "You are a conversation summarizer.", [], model, 2000, client,
-                        ).content[0].text)
+                            "You are a conversation summarizer.", [], model, 1000, client,
+                        ).content[0].text,
+                        keep_head=3, keep_tail=3,
+                        on_important=on_important_fn,
+                    )
+                    if collapsed is not None:
+                        messages[:] = collapsed
                         circuit_breaker.record_success()
-                    except Exception:
-                        circuit_breaker.record_failure()
-            else:
-                pass  # Circuit breaker open, skip compression
+                    else:
+                        try:
+                            messages[:] = auto_compact(messages, lambda p: _llm_call(
+                                [{"role": "user", "content": p}],
+                                "You are a conversation summarizer.", [], model, 2000, client,
+                            ).content[0].text)
+                            circuit_breaker.record_success()
+                        except Exception:
+                            circuit_breaker.record_failure()
+                else:
+                    pass  # Circuit breaker open, skip compression
+
+        # Rebuild system prompt with current objective + persisted facts
+        if _use_orch:
+            result = orchestrator.build_prompt()
+            system = result.system
+        else:
+            current_obj = get_objective_fn() if get_objective_fn else ""
+            facts = get_persistent_fn() if get_persistent_fn else []
+            system = _build_system_prompt(base_system, skills_descriptions,
+                                          current_objective=current_obj,
+                                          persistent_facts=facts)
 
         # Drain background notifications
         if bg_drain_fn:
@@ -137,24 +206,47 @@ def agent_loop(
                     f"[bg:{n.get('task_id','?')}] {n.get('status','?')}: {str(n.get('result',''))[:200]}"
                     for n in notifs
                 )
-                messages.append({"role": "user", "content": f"<background-results>\n{txt}\n</background-results>"})
+                _append_msg("user", f"<background-results>\n{txt}\n</background-results>")
 
         # Check lead inbox
         if inbox_check_fn:
             inbox = inbox_check_fn()
             if inbox:
-                messages.append({"role": "user", "content": f"<inbox>{json.dumps(inbox)}</inbox>"})
+                _append_msg("user", f"<inbox>{json.dumps(inbox)}</inbox>")
+
+        # ── Intent classification + tool filtering ────────
+        tools = tools_registry.to_api_format()
+
+        if classify_intent_fn and filter_tools_fn:
+            # Extract last user message for intent classification
+            last_user = ""
+            for msg in reversed(messages):
+                if msg["role"] == "user":
+                    content = msg["content"]
+                    last_user = content if isinstance(content, str) else str(content)
+                    break
+
+            intent = classify_intent_fn(last_user)
+
+            if intent == "unsafe":
+                _append_msg("user", "[blocked: unsafe intent detected]")
+                return
+
+            before = len(tools)
+            tools = filter_tools_fn(intent, tools)
+            after = len(tools)
+            if before != after:
+                print(f"  [intent] {intent} → {after}/{before} tools")
 
         # ── LLM call ────────────────────────────────────
-        tools = tools_registry.to_api_format()
 
         try:
             response = _llm_call(messages, system, tools, model, 8000, client)
         except Exception as e:
-            messages.append({"role": "user", "content": f"[API Error: {e}]"})
+            _append_msg("user", f"[API Error: {e}]")
             break
 
-        messages.append({"role": "assistant", "content": response.content})
+        _append_msg("assistant", response.content)
 
         if response.stop_reason != "tool_use":
             # ▶ Stop hook — can force continue
@@ -166,7 +258,7 @@ def agent_loop(
                     )[:5000],
                 ))
                 if stop_result.exit_code == 2:
-                    messages.append({"role": "user", "content": stop_result.stderr or "Continue."})
+                    _append_msg("user", stop_result.stderr or "Continue.")
                     continue
             return  # Natural stop
 
@@ -224,6 +316,27 @@ def agent_loop(
                     tool_result=str(output),
                 ))
 
+            # ▶ M2 Context Engine events ─────────────────
+            if _use_orch:
+                if tool_name in ("read_file",):
+                    path = tool_input.get("file_path") or tool_input.get("path", "")
+                    if path:
+                        orchestrator.on_file_read(path, str(output))
+                elif tool_name in ("edit_file", "write_file"):
+                    path = tool_input.get("file_path") or tool_input.get("path", "")
+                    if path:
+                        orchestrator.on_file_write(path)
+                elif tool_name == "bash":
+                    cmd = tool_input.get("command", "")
+                    if cmd.startswith("cd "):
+                        target = cmd[3:].strip().strip("\"'")
+                        if target:
+                            import os as _os
+                            new_cwd = _os.path.normpath(
+                                _os.path.join(str(WORKDIR), target)
+                            ) if not _os.path.isabs(target) else target
+                            orchestrator.on_directory_changed(new_cwd)
+
             if tool_name == "TodoWrite":
                 used_todo = True
 
@@ -236,7 +349,7 @@ def agent_loop(
         if rounds_without_todo >= 3:
             results.append({"type": "text", "text": "<reminder>Update your todos.</reminder>"})
 
-        messages.append({"role": "user", "content": results})
+        _append_msg("user", results)
 
 
 def run_subagent(

@@ -11,9 +11,42 @@
 
   "hooks": {
     "SessionStart": [],
-    "UserPromptSubmit": [],
-    "PreToolUse": [],
-    "PostToolUse": [],
+    "UserPromptSubmit": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python examples/hooks-demo/inject_context.py",
+            "timeout": 3000
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python examples/hooks-demo/check_dangerous.py",
+            "timeout": 3000
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python examples/hooks-demo/audit_log.py",
+            "timeout": 3000
+          }
+        ]
+      }
+    ],
     "Stop": []
   },
 
@@ -37,5 +70,40 @@
   "permissions": {
     "allow": [],
     "deny": []
+  },
+
+  "mcp_servers": {
+    "_comment": "Free MCP servers — 0 API key. Verified on npm.",
+    "duckduckgo-search": {
+      "command": "npx",
+      "args": ["-y", "duckduckgo-websearch"],
+      "env": {}
+    },
+    "fetch": {
+      "command": "npx",
+      "args": ["-y", "mcp-fetch-server"],
+      "env": {}
+    },
+    "brave-search": {
+      "disabled": true,
+      "_comment": "需要注册拿免费 API key (2000次/月): https://brave.com/search/api/",
+      "command": "npx",
+      "args": ["-y", "@anthropic-ai/mcp-server-brave-search"],
+      "env": {"BRAVE_API_KEY": "${BRAVE_API_KEY}"}
+    }
+  },
+
+  "intent": {
+    "mode": "keyword",
+    "_comment": "mode: 'keyword' (0 token) or 'llm' (more accurate, uses ~50 tokens per classification)",
+    "routes": {
+      "code_search": ["grep", "glob", "memory_search", "read_file"],
+      "code_edit": ["read_file", "write_file", "edit_file", "bash"],
+      "code_index": ["memory_search", "grep", "glob", "read_file"],
+      "task_manage": ["task_create", "task_get", "task_update", "task_list", "TodoWrite", "set_objective"],
+      "web_search": [],
+      "knowledge": [],
+      "unsafe": []
+    }
   }
 }

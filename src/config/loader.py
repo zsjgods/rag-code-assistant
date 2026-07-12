@@ -37,7 +37,7 @@ def load_config(
     default_path = wd / config_name
     if default_path.exists():
         try:
-            config = json.loads(default_path.read_text())
+            config = json.loads(default_path.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
             pass
 
@@ -45,7 +45,7 @@ def load_config(
     local_path = wd / local_name
     if local_path.exists():
         try:
-            local = json.loads(local_path.read_text())
+            local = json.loads(local_path.read_text(encoding="utf-8"))
             config = _deep_merge(config, local)
         except json.JSONDecodeError:
             pass

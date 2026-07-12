@@ -28,7 +28,7 @@ class Scratchpad:
         """Write to scratchpad. No permission check."""
         fp = self._dir / filename
         fp.parent.mkdir(parents=True, exist_ok=True)
-        fp.write_text(content)
+        fp.write_text(content, encoding="utf-8")
         return str(fp)
 
     def read(self, filename: str) -> str:
@@ -36,7 +36,7 @@ class Scratchpad:
         fp = self._dir / filename
         if not fp.exists():
             return f"(scratchpad file not found: {filename})"
-        return fp.read_text()
+        return fp.read_text(encoding="utf-8")
 
     def ls(self) -> list[str]:
         """List all files in scratchpad."""

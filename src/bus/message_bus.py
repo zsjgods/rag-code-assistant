@@ -42,8 +42,8 @@ class MessageBus:
         path = self.inbox_dir / f"{name}.jsonl"
         if not path.exists():
             return []
-        msgs = [json.loads(l) for l in path.read_text().strip().splitlines() if l]
-        path.write_text("")  # Drain
+        msgs = [json.loads(l) for l in path.read_text(encoding="utf-8").strip().splitlines() if l]
+        path.write_text("", encoding="utf-8")  # Drain
         return msgs
 
     def broadcast(self, sender: str, content: str, names: list[str]) -> str:

@@ -21,7 +21,7 @@ class SessionState:
     def _load(self) -> dict:
         if self._file.exists():
             try:
-                return json.loads(self._file.read_text())
+                return json.loads(self._file.read_text(encoding="utf-8"))
             except (json.JSONDecodeError, FileNotFoundError):
                 pass
         return self._fresh()
@@ -35,7 +35,7 @@ class SessionState:
 
     def _save(self):
         self._state["mtime"] = time.time()
-        self._file.write_text(json.dumps(self._state, indent=2))
+        self._file.write_text(json.dumps(self._state, indent=2), encoding="utf-8")
 
     @property
     def session_id(self) -> str:
