@@ -67,15 +67,18 @@ agent-core/
 │   ├── state/                  # Observable Store
 │   └── config/                 # 分层配置合并
 │
+├── scripts/                    # 评测 & 验证入口
+│   ├── run_eval.py
+│   ├── run_bfcl.py
+│   ├── run_gaia.py
+│   ├── run_context_fidelity.py
+│   ├── verify_m8.py
+│   ├── verify_m9.py
+│   └── verify_m10.py
+│
+├── eval_data/                  # 评测数据（不跟踪 git）
 ├── examples/hooks-demo/        # 钩子系统示例
 ├── tests/                      # 测试
-├── run_eval.py                 # 工具调用评测入口
-├── run_context_fidelity.py     # 上下文保真度评测入口
-├── run_gaia.py                 # GAIA 评测入口
-├── run_bfcl.py                 # BFCL v3 评测入口
-├── verify_m8.py                # M8 重要性引擎验证
-├── verify_m9.py                # M9 智能层验证
-└── verify_m10.py               # M10 生命周期引擎验证
 ```
 
 ## 核心架构

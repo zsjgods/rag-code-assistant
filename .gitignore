@@ -10,3 +10,5 @@ settings.local.json
 *.jsonl
 .s_full_session.json
 docs/
+.vscode/
+eval_data/
