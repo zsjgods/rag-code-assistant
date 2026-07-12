@@ -9,3 +9,4 @@ settings.local.json
 /tmp/
 *.jsonl
 .s_full_session.json
+docs/
